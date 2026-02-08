@@ -22,7 +22,7 @@ static sys_slist_t widgets = SYS_SLIST_STATIC_INIT(&widgets);
 
 struct battery_status_state {
     uint8_t level;
-#if IS_ENABLED(CONFIG_USB_DEVICE_STACK)
+#if IS_ENABLED(CONFIG_ZMK_USB)
     bool usb_present;
 #endif
 };
@@ -43,7 +43,7 @@ LV_IMG_DECLARE(batt_0_chg);
 static void set_battery_symbol(lv_obj_t *icon, struct battery_status_state state) {
     uint8_t level = state.level;
 
-#if IS_ENABLED(CONFIG_USB_DEVICE_STACK)
+#if IS_ENABLED(CONFIG_ZMK_USB)
     if (level > 95) {
         lv_image_set_src(icon, state.usb_present ? &batt_100_chg : &batt_100);
     } else if (level > 74) {
@@ -57,7 +57,7 @@ static void set_battery_symbol(lv_obj_t *icon, struct battery_status_state state
     } else {
         lv_image_set_src(icon, state.usb_present ? &batt_0_chg : &batt_0);
     }
-#endif /* IS_ENABLED(CONFIG_USB_DEVICE_STACK) */
+#endif /* IS_ENABLED(CONFIG_ZMK_USB) */
 }
 
 void battery_status_update_cb(struct battery_status_state state) {
@@ -70,9 +70,9 @@ static struct battery_status_state battery_status_get_state(const zmk_event_t *e
 
     return (struct battery_status_state){
         .level = (ev != NULL) ? ev->state_of_charge : zmk_battery_state_of_charge(),
-#if IS_ENABLED(CONFIG_USB_DEVICE_STACK)
+#if IS_ENABLED(CONFIG_ZMK_USB)
         .usb_present = zmk_usb_is_powered(),
-#endif /* IS_ENABLED(CONFIG_USB_DEVICE_STACK) */
+#endif /* IS_ENABLED(CONFIG_ZMK_USB) */
     };
 }
 
@@ -80,9 +80,9 @@ ZMK_DISPLAY_WIDGET_LISTENER(widget_battery_status, struct battery_status_state,
                             battery_status_update_cb, battery_status_get_state)
 
 ZMK_SUBSCRIPTION(widget_battery_status, zmk_battery_state_changed);
-#if IS_ENABLED(CONFIG_USB_DEVICE_STACK)
+#if IS_ENABLED(CONFIG_ZMK_USB)
 ZMK_SUBSCRIPTION(widget_battery_status, zmk_usb_conn_state_changed);
-#endif /* IS_ENABLED(CONFIG_USB_DEVICE_STACK) */
+#endif /* IS_ENABLED(CONFIG_ZMK_USB) */
 
 int zmk_widget_battery_status_init(struct zmk_widget_battery_status *widget, lv_obj_t *parent) {
     widget->obj = lv_image_create(parent);
