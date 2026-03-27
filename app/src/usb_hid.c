@@ -7,9 +7,6 @@
 #include <zephyr/device.h>
 #include <zephyr/init.h>
 
-#include <zephyr/usb/usb_device.h>
-#include <zephyr/usb/class/usb_hid.h>
-
 #include <zmk/usb.h>
 #include <zmk/hid.h>
 #include <zmk/keymap.h>
@@ -29,6 +26,214 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 static const struct device *hid_dev;
 
 static K_SEM_DEFINE(hid_sem, 1, 1);
+
+#if IS_ENABLED(CONFIG_ZMK_USB_STACK_NEXT)
+
+/* ===== New USB Device Stack HID Implementation ===== */
+
+#include <zephyr/usb/usbd.h>
+#include <zephyr/usb/class/usbd_hid.h>
+
+static void zmk_usb_hid_iface_ready(const struct device *dev, const bool ready) {
+    LOG_INF("HID interface %s", ready ? "ready" : "not ready");
+    if (ready) {
+        k_sem_give(&hid_sem);
+    }
+}
+
+static int zmk_usb_hid_get_report(const struct device *dev,
+                                  const uint8_t type, const uint8_t id,
+                                  const uint16_t len, uint8_t *const buf) {
+    switch (type) {
+    case HID_REPORT_TYPE_INPUT:
+        switch (id) {
+        case ZMK_HID_REPORT_ID_KEYBOARD: {
+            struct zmk_hid_keyboard_report *report = zmk_hid_get_keyboard_report();
+            uint16_t report_size = sizeof(*report);
+            if (len < report_size) {
+                return -EINVAL;
+            }
+            memcpy(buf, (uint8_t *)report, report_size);
+            return report_size;
+        }
+        case ZMK_HID_REPORT_ID_CONSUMER: {
+            struct zmk_hid_consumer_report *report = zmk_hid_get_consumer_report();
+            uint16_t report_size = sizeof(*report);
+            if (len < report_size) {
+                return -EINVAL;
+            }
+            memcpy(buf, (uint8_t *)report, report_size);
+            return report_size;
+        }
+        default:
+            LOG_ERR("Invalid input report ID %d requested", id);
+            return -EINVAL;
+        }
+        break;
+    case HID_REPORT_TYPE_FEATURE:
+        switch (id) {
+#if IS_ENABLED(CONFIG_ZMK_POINTING_SMOOTH_SCROLLING)
+        case ZMK_HID_REPORT_ID_MOUSE: {
+            struct zmk_hid_mouse_resolution_feature_report res_report;
+            struct zmk_endpoint_instance endpoint = {
+                .transport = ZMK_TRANSPORT_USB,
+            };
+            struct zmk_pointing_resolution_multipliers mult =
+                zmk_pointing_resolution_multipliers_get_profile(endpoint);
+            res_report.report_id = ZMK_HID_REPORT_ID_MOUSE;
+            res_report.body.wheel_res = mult.wheel;
+            res_report.body.hwheel_res = mult.hor_wheel;
+            uint16_t report_size = sizeof(res_report);
+            if (len < report_size) {
+                return -EINVAL;
+            }
+            memcpy(buf, (uint8_t *)&res_report, report_size);
+            return report_size;
+        }
+#endif // IS_ENABLED(CONFIG_ZMK_POINTING_SMOOTH_SCROLLING)
+        default:
+            return -ENOTSUP;
+        }
+        break;
+    default:
+        return -ENOTSUP;
+    }
+}
+
+static int zmk_usb_hid_set_report(const struct device *dev,
+                                  const uint8_t type, const uint8_t id,
+                                  const uint16_t len, const uint8_t *const buf) {
+    switch (type) {
+    case HID_REPORT_TYPE_OUTPUT:
+        switch (id) {
+#if IS_ENABLED(CONFIG_ZMK_HID_INDICATORS)
+        case ZMK_HID_REPORT_ID_LEDS:
+            if (len != sizeof(struct zmk_hid_led_report)) {
+                LOG_ERR("LED set report is malformed: length=%d", len);
+                return -EINVAL;
+            } else {
+                struct zmk_endpoint_instance endpoint = {
+                    .transport = ZMK_TRANSPORT_USB,
+                };
+                zmk_hid_indicators_process_report(
+                    &((const struct zmk_hid_led_report *)buf)->body, endpoint);
+            }
+            return 0;
+#endif // IS_ENABLED(CONFIG_ZMK_HID_INDICATORS)
+        default:
+            LOG_ERR("Invalid output report ID %d", id);
+            return -EINVAL;
+        }
+        break;
+    case HID_REPORT_TYPE_FEATURE:
+        switch (id) {
+#if IS_ENABLED(CONFIG_ZMK_POINTING_SMOOTH_SCROLLING)
+        case ZMK_HID_REPORT_ID_MOUSE:
+            if (len != sizeof(struct zmk_hid_mouse_resolution_feature_report)) {
+                return -EINVAL;
+            }
+            struct zmk_endpoint_instance ep = {
+                .transport = ZMK_TRANSPORT_USB,
+            };
+            zmk_pointing_resolution_multipliers_process_report(
+                &((const struct zmk_hid_mouse_resolution_feature_report *)buf)->body, ep);
+            return 0;
+#endif // IS_ENABLED(CONFIG_ZMK_POINTING_SMOOTH_SCROLLING)
+        default:
+            return -ENOTSUP;
+        }
+        break;
+    default:
+        return -ENOTSUP;
+    }
+}
+
+static void zmk_usb_hid_input_report_done(const struct device *dev,
+                                           const uint8_t *const report) {
+    k_sem_give(&hid_sem);
+}
+
+static void zmk_usb_hid_set_protocol_cb(const struct device *dev, const uint8_t proto) {
+    LOG_INF("HID protocol changed to %s", proto ? "Report" : "Boot");
+}
+
+static const struct hid_device_ops zmk_hid_ops = {
+    .iface_ready = zmk_usb_hid_iface_ready,
+    .get_report = zmk_usb_hid_get_report,
+    .set_report = zmk_usb_hid_set_report,
+    .input_report_done = zmk_usb_hid_input_report_done,
+    .set_protocol = zmk_usb_hid_set_protocol_cb,
+};
+
+static int zmk_usb_hid_send_report(const uint8_t *report, size_t len) {
+    enum zmk_usb_status status = zmk_usb_get_status();
+
+    switch (status) {
+    case ZMK_USB_STATUS_SUSPENDED: {
+        struct usbd_context *ctx = zmk_usb_get_usbd_context();
+        return usbd_wakeup_request(ctx);
+    }
+    case ZMK_USB_STATUS_ERROR:
+    case ZMK_USB_STATUS_RESET:
+    case ZMK_USB_STATUS_DISCONNECTED:
+    case ZMK_USB_STATUS_UNKNOWN:
+        return -ENODEV;
+    default:
+        k_sem_take(&hid_sem, K_MSEC(30));
+        int err = hid_device_submit_report(hid_dev, len, report);
+
+        if (err) {
+            k_sem_give(&hid_sem);
+        }
+
+        return err;
+    }
+}
+
+int zmk_usb_hid_send_keyboard_report(void) {
+    struct zmk_hid_keyboard_report *report = zmk_hid_get_keyboard_report();
+    return zmk_usb_hid_send_report((uint8_t *)report, sizeof(*report));
+}
+
+int zmk_usb_hid_send_consumer_report(void) {
+    struct zmk_hid_consumer_report *report = zmk_hid_get_consumer_report();
+    return zmk_usb_hid_send_report((uint8_t *)report, sizeof(*report));
+}
+
+#if IS_ENABLED(CONFIG_ZMK_POINTING)
+int zmk_usb_hid_send_mouse_report(void) {
+    struct zmk_hid_mouse_report *report = zmk_hid_get_mouse_report();
+    return zmk_usb_hid_send_report((uint8_t *)report, sizeof(*report));
+}
+#endif // IS_ENABLED(CONFIG_ZMK_POINTING)
+
+void zmk_usb_hid_set_protocol(uint8_t protocol) {
+    /* Not used in new stack - protocol changes come via set_protocol callback */
+}
+
+static int zmk_usb_hid_init(void) {
+    int ret;
+
+    hid_dev = DEVICE_DT_GET_ONE(zephyr_hid_device);
+    if (!device_is_ready(hid_dev)) {
+        LOG_ERR("HID device is not ready");
+        return -EIO;
+    }
+
+    ret = hid_device_register(hid_dev, zmk_hid_report_desc,
+                              sizeof(zmk_hid_report_desc), &zmk_hid_ops);
+    if (ret != 0) {
+        LOG_ERR("Failed to register HID device, %d", ret);
+        return ret;
+    }
+
+    return 0;
+}
+
+#else /* Legacy USB Device Stack */
+
+#include <zephyr/usb/usb_device.h>
+#include <zephyr/usb/class/usb_hid.h>
 
 static void in_ready_cb(const struct device *dev) { k_sem_give(&hid_sem); }
 
@@ -186,12 +391,12 @@ static const struct hid_ops ops = {
 
 static int zmk_usb_hid_send_report(const uint8_t *report, size_t len) {
     switch (zmk_usb_get_status()) {
-    case USB_DC_SUSPEND:
+    case ZMK_USB_STATUS_SUSPENDED:
         return usb_wakeup_request();
-    case USB_DC_ERROR:
-    case USB_DC_RESET:
-    case USB_DC_DISCONNECTED:
-    case USB_DC_UNKNOWN:
+    case ZMK_USB_STATUS_ERROR:
+    case ZMK_USB_STATUS_RESET:
+    case ZMK_USB_STATUS_DISCONNECTED:
+    case ZMK_USB_STATUS_UNKNOWN:
         return -ENODEV;
     default:
         k_sem_take(&hid_sem, K_MSEC(30));
@@ -235,6 +440,10 @@ int zmk_usb_hid_send_mouse_report() {
 }
 #endif // IS_ENABLED(CONFIG_ZMK_POINTING)
 
+#if !IS_ENABLED(CONFIG_ZMK_USB_BOOT)
+void zmk_usb_hid_set_protocol(uint8_t protocol) {}
+#endif
+
 static int zmk_usb_hid_init(void) {
     hid_dev = device_get_binding("HID_0");
     if (hid_dev == NULL) {
@@ -252,5 +461,7 @@ static int zmk_usb_hid_init(void) {
 
     return 0;
 }
+
+#endif /* CONFIG_ZMK_USB_STACK_NEXT */
 
 SYS_INIT(zmk_usb_hid_init, APPLICATION, CONFIG_ZMK_USB_HID_INIT_PRIORITY);

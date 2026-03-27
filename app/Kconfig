@@ -21,20 +21,36 @@ menu "Basic Keyboard Setup"
 config ZMK_KEYBOARD_NAME
     string "Keyboard Name"
 
-config USB_DEVICE_PRODUCT
+config ZMK_USB_VID
+    hex "USB Vendor ID"
+    default 0x1D50
+
+config ZMK_USB_PID
+    hex "USB Product ID"
+    default 0x615E
+
+config ZMK_USB_MANUFACTURER
+    string "USB manufacturer string"
+    default "ZMK Project"
+
+config ZMK_USB_PRODUCT
+    string "USB product string"
     default ZMK_KEYBOARD_NAME
+
+config USB_DEVICE_PRODUCT
+    default ZMK_USB_PRODUCT
 
 config BT_DEVICE_NAME
     default ZMK_KEYBOARD_NAME
 
 config USB_DEVICE_VID
-    default 0x1D50
+    default ZMK_USB_VID
 
 config USB_DEVICE_PID
-    default 0x615E
+    default ZMK_USB_PID
 
 config USB_DEVICE_MANUFACTURER
-    default "ZMK Project"
+    default ZMK_USB_MANUFACTURER
 
 config BT_DIS_PNP_VID
     default 0x1D50
@@ -135,18 +151,34 @@ config ZMK_USB
     bool "USB"
     depends on (!ZMK_SPLIT || (ZMK_SPLIT && ZMK_SPLIT_ROLE_CENTRAL))
     select USB
+
+choice ZMK_USB_STACK
+    prompt "USB Device Stack"
+    depends on ZMK_USB
+    default ZMK_USB_STACK_LEGACY
+
+config ZMK_USB_STACK_LEGACY
+    bool "Legacy USB Device Stack"
     select USB_DEVICE_STACK
     select USB_DEVICE_HID
+
+config ZMK_USB_STACK_NEXT
+    bool "New USB Device Stack (required for High-Speed ULPI)"
+    select USB_DEVICE_STACK_NEXT
+    select USBD_HID_SUPPORT
+
+endchoice
 
 config ZMK_USB_BOOT
     bool "USB Boot Protocol Support"
     depends on ZMK_USB
+    depends on ZMK_USB_STACK_LEGACY
     select USB_HID_BOOT_PROTOCOL
 
 config USB_DEVICE_INITIALIZE_AT_BOOT
     default n
 
-if ZMK_USB
+if ZMK_USB && ZMK_USB_STACK_LEGACY
 
 config USB_NUMOF_EP_WRITE_RETRIES
     default 10
@@ -154,7 +186,7 @@ config USB_NUMOF_EP_WRITE_RETRIES
 config USB_HID_POLL_INTERVAL_MS
     default 1
 
-endif # ZMK_USB
+endif # ZMK_USB && ZMK_USB_STACK_LEGACY
 
 menuconfig ZMK_BLE
     bool "BLE (HID over GATT)"
@@ -341,7 +373,7 @@ config ZMK_RGB_UNDERGLOW_AUTO_OFF_IDLE
 
 config ZMK_RGB_UNDERGLOW_AUTO_OFF_USB
     bool "Turn off RGB underglow when USB is disconnected"
-    depends on USB_DEVICE_STACK
+    depends on ZMK_USB
 
 endif # ZMK_RGB_UNDERGLOW
 
@@ -490,7 +522,7 @@ rsource "src/boot/Kconfig"
 
 menu "Initialization Priorities"
 
-if USB_DEVICE_STACK
+if ZMK_USB
 
 config ZMK_USB_INIT_PRIORITY
     int "USB Init Priority"
@@ -500,7 +532,7 @@ config ZMK_USB_HID_INIT_PRIORITY
     int "USB HID Init Priority"
     default 95
 
-endif # USB
+endif # ZMK_USB
 
 if ZMK_BLE || ZMK_SPLIT_BLE
 

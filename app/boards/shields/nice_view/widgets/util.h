@@ -41,7 +41,7 @@ struct status_state {
 
 struct battery_status_state {
     uint8_t level;
-#if IS_ENABLED(CONFIG_USB_DEVICE_STACK)
+#if IS_ENABLED(CONFIG_ZMK_USB)
     bool usb_present;
 #endif
 };
