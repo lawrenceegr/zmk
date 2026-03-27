@@ -1,0 +1,24 @@
+/*
+ * Copyright (c) 2024 The ZMK Contributors
+ *
+ * SPDX-License-Identifier: MIT
+ *
+ * Overlay for ZMK Studio RPC over USB CDC ACM (new USB device stack).
+ * Adds the CDC ACM UART node under zephyr_udc0 and wires it to ZMK Studio.
+ *
+ * The physical layout is defined in keyboard_h723zg-layouts.dtsi, included
+ * by the board's DTS. The board's DTS must also have zmk,matrix-transform
+ * removed from chosen (replaced by a zmk,physical-layout node).
+ */
+
+&zephyr_udc0 {
+    snippet_studio_rpc_usb_uart_next: snippet_studio_rpc_usb_uart_next {
+        compatible = "zephyr,cdc-acm-uart";
+    };
+};
+
+/ {
+    chosen {
+        zmk,studio-rpc-uart = &snippet_studio_rpc_usb_uart_next;
+    };
+};
