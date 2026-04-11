@@ -125,6 +125,7 @@ static void serial_cb(const struct device *dev, void *user_data) {
     if (uart_irq_tx_ready(uart_dev)) {
         struct ring_buf *tx_buf = zmk_rpc_get_tx_buf();
         uint32_t len;
+        printk("serial_cb: TX ready, buf size=%d\n", ring_buf_size_get(tx_buf));
         while ((len = ring_buf_size_get(tx_buf)) > 0) {
             uint8_t *buf;
             uint32_t claim_len = ring_buf_get_claim(tx_buf, &buf, tx_buf->size);
@@ -134,9 +135,10 @@ static void serial_cb(const struct device *dev, void *user_data) {
             }
 
             int sent = uart_fifo_fill(uart_dev, buf, claim_len);
-
+            printk("serial_cb: TX fifo_fill claim=%d sent=%d\n", claim_len, sent);
             ring_buf_get_finish(tx_buf, MAX(sent, 0));
         }
+        printk("serial_cb: TX drain done\n");
     }
 }
 
