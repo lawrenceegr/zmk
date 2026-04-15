@@ -85,8 +85,6 @@ void zmk_rpc_rx_notify(void) { k_sem_give(&rpc_rx_sem); }
 static bool rpc_read_cb(pb_istream_t *stream, uint8_t *buf, size_t count) {
     uint32_t write_offset = 0;
 
-    printk("rpc_read_cb: enter count=%zu framing=%d\n", count, rpc_framing_state);
-
     do {
         uint8_t *buffer;
         uint32_t len = ring_buf_get_claim(&rpc_rx_buf, &buffer, count - write_offset);
@@ -101,15 +99,11 @@ static bool rpc_read_cb(pb_istream_t *stream, uint8_t *buf, size_t count) {
                 }
             }
         } else {
-            printk("rpc_read_cb: blocking write_offset=%d count=%zu\n", write_offset, count);
             k_sem_take(&rpc_rx_sem, K_FOREVER);
-            printk("rpc_read_cb: unblocked\n");
         }
 
         ring_buf_get_finish(&rpc_rx_buf, len);
     } while (write_offset < count && rpc_framing_state != FRAMING_STATE_EOF);
-
-    printk("rpc_read_cb: exit write_offset=%d framing=%d\n", write_offset, rpc_framing_state);
 
     if (rpc_framing_state == FRAMING_STATE_EOF) {
         stream->bytes_left = 0;
@@ -223,9 +217,7 @@ exit:
 }
 
 static void rpc_main(void) {
-    printk("rpc_main: thread started\n");
     for (;;) {
-        printk("rpc_main: waiting for request\n");
         pb_istream_t stream = pb_istream_for_rx_ring_buf();
         zmk_studio_Request req = zmk_studio_Request_init_zero;
 #if IS_ENABLED(CONFIG_THREAD_ANALYZER)
@@ -233,16 +225,13 @@ static void rpc_main(void) {
 #endif // IS_ENABLED(CONFIG_THREAD_ANALYZER)
         bool status = pb_decode(&stream, &zmk_studio_Request_msg, &req);
 
-        printk("rpc_main: pb_decode returned %d\n", (int)status);
         rpc_framing_state = FRAMING_STATE_IDLE;
 
         if (status) {
-            printk("rpc_main: RPC decode ok subsystem=%d\n", req.which_subsystem);
+            LOG_DBG("RPC decode ok, subsystem %d", req.which_subsystem);
             zmk_studio_Response resp = handle_request(&req);
 
-            printk("rpc_main: calling send_response\n");
             int err = send_response(&resp);
-            printk("rpc_main: send_response returned %d\n", err);
 #if IS_ENABLED(CONFIG_THREAD_ANALYZER)
             thread_analyzer_print(0);
 #endif // IS_ENABLED(CONFIG_THREAD_ANALYZER)
@@ -250,7 +239,7 @@ static void rpc_main(void) {
                 LOG_ERR("Failed to send the RPC response %d", err);
             }
         } else {
-            printk("rpc_main: decode failed\n");
+            LOG_DBG("Decode failed");
         }
     }
 }

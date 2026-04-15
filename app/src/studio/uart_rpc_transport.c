@@ -22,7 +22,7 @@ static const struct device *const uart_dev = DEVICE_DT_GET(UART_DEVICE_NODE);
 
 static void tx_notify(struct ring_buf *tx_ring_buf, size_t written, bool msg_done,
                       void *user_data) {
-    if (msg_done || (ring_buf_size_get(tx_ring_buf) > (ring_buf_capacity_get(tx_ring_buf) / 2))) {
+    if (msg_done) {
 #if IS_ENABLED(CONFIG_UART_INTERRUPT_DRIVEN)
         uart_irq_tx_enable(uart_dev);
 #else
@@ -125,7 +125,6 @@ static void serial_cb(const struct device *dev, void *user_data) {
     if (uart_irq_tx_ready(uart_dev)) {
         struct ring_buf *tx_buf = zmk_rpc_get_tx_buf();
         uint32_t len;
-        printk("serial_cb: TX ready, buf size=%d\n", ring_buf_size_get(tx_buf));
         while ((len = ring_buf_size_get(tx_buf)) > 0) {
             uint8_t *buf;
             uint32_t claim_len = ring_buf_get_claim(tx_buf, &buf, tx_buf->size);
@@ -135,10 +134,14 @@ static void serial_cb(const struct device *dev, void *user_data) {
             }
 
             int sent = uart_fifo_fill(uart_dev, buf, claim_len);
-            printk("serial_cb: TX fifo_fill claim=%d sent=%d\n", claim_len, sent);
+
             ring_buf_get_finish(tx_buf, MAX(sent, 0));
         }
-        printk("serial_cb: TX drain done\n");
+
+        /* Disable TX IRQ when buffer is empty to prevent irq_cb_work from
+         * spinning indefinitely. uart_irq_tx_enable is called again by
+         * tx_notify when new data is available. */
+        uart_irq_tx_disable(uart_dev);
     }
 }
 
